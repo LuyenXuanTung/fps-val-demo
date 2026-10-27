@@ -5,6 +5,8 @@ import { sound } from './audio.js';
 import { enemies, type EnemyBot } from './enemies.js';
 import { muzzleFlashMesh, isDrawing, ads } from './weapon.js';
 import { nextStreak, STREAK_NAMES } from './streak.js';
+import { notifyShot } from './net.js';
+import { wallMeshes } from './map.js';
 
 export interface ActiveTracer {
     line: THREE.Line;
@@ -80,6 +82,19 @@ function showStreakBanner(streak: number): void {
     streakBannerTimer = setTimeout(() => { gameState.streakLabel = ''; }, 1800);
 }
 
+/** Kill rewards/feedback shared by practice bots and the networked opponent. */
+export function registerKill(isHead: boolean, weapon: string, pos: THREE.Vector3): void {
+    const now = performance.now();
+    gameState.killStreak = nextStreak(gameState.killStreak, lastKillAt, now);
+    lastKillAt = now;
+    gameState.credits += 200;
+
+    sound.playKill(gameState.killStreak, isHead);
+    showStreakBanner(gameState.killStreak);
+    addKillfeedItem(isHead, weapon);
+    spawnSoulOrb(pos);
+}
+
 function aliveTargetMeshes(): THREE.Mesh[] {
     const meshes: THREE.Mesh[] = [];
     enemies.forEach(b => {
@@ -91,23 +106,17 @@ function aliveTargetMeshes(): THREE.Mesh[] {
 function applyHit(hit: THREE.Intersection, bodyDmg: number, headDmg: number, weapon: string): void {
     const bot = hit.object.userData.bot as EnemyBot;
     const isHead = hit.object.userData.isHead === true;
-    bot.hp -= isHead ? headDmg : bodyDmg;
     showHitmarker(isHead);
+    // Networked opponent: victim owns its HP and reports death back
+    if (bot.onHit) { bot.onHit(isHead ? headDmg : bodyDmg, isHead, weapon); return; }
+    bot.hp -= isHead ? headDmg : bodyDmg;
     bot.hbFill.scale.x = Math.max(0.001, bot.hp / bot.maxHp);
 
     if (bot.hp > 0 || !bot.alive) return;
 
     bot.alive = false;
     bot.mesh.visible = false;
-    const now = performance.now();
-    gameState.killStreak = nextStreak(gameState.killStreak, lastKillAt, now);
-    lastKillAt = now;
-    gameState.credits += 200;
-
-    sound.playKill(gameState.killStreak, isHead);
-    showStreakBanner(gameState.killStreak);
-    addKillfeedItem(isHead, weapon);
-    spawnSoulOrb(bot.mesh.position);
+    registerKill(isHead, weapon, bot.mesh.position);
     gameState.enemyAvatarDim = true;
 
     setTimeout(() => {
@@ -119,18 +128,51 @@ function applyHit(hit: THREE.Intersection, bodyDmg: number, headDmg: number, wea
     }, 2600);
 }
 
-// Infinite ammo: no magazine, no reload.
+// Infinite reserve, 30-round magazine: must reload (R or auto on empty).
+export const MAG_SIZE = 30;
+export const RELOAD_MS = 2000;
+
+export const isReloading = (now = performance.now()) => now < gameState.reloadEndsAt;
+
+export function startReload(): void {
+    const now = performance.now();
+    if (gameState.holdingKnife || gameState.holdingSpike) return;
+    if (isReloading(now) || gameState.ammo >= MAG_SIZE) return;
+    gameState.reloadEndsAt = now + RELOAD_MS;
+    gameState.scoped = false;
+    sound.playReloadSound();
+}
+
+/** Engine tick: finish reload when its timer elapses. */
+export function updateReload(now: number): void {
+    if (gameState.reloadEndsAt && now >= gameState.reloadEndsAt) {
+        gameState.reloadEndsAt = 0;
+        gameState.ammo = MAG_SIZE;
+    }
+}
+
+/** First thing the ray touches; walls stop bullets. Returns the hit only if it's a player/bot. */
+function castShot(): { target: THREE.Intersection | null; point: THREE.Vector3 | null } {
+    const hits = raycaster.intersectObjects([...aliveTargetMeshes(), ...wallMeshes], false);
+    const first = hits[0];
+    if (!first) return { target: null, point: null };
+    return { target: first.object.userData.bot ? first : null, point: first.point };
+}
+
 export function fireWeapon(): void {
     if (gameState.holdingSpike || gameState.holdingKnife) return;
     const now = performance.now();
-    if (isDrawing(now)) return;
+    if (isDrawing(now) || isReloading(now)) return;
+    if (gameState.ammo <= 0) { startReload(); return; }
     const fireInterval = gameState.empressActive ? 88 : 108;
     if (now - gameState.lastShotTime < fireInterval) return;
 
     gameState.lastShotTime = now;
+    gameState.ammo--;
     gameState.recoilOffset = Math.min(gameState.recoilOffset + 0.055, 0.22);
 
     sound.playVandalShot(gameState.empressActive);
+    notifyShot();
     if (muzzleFlashMesh) {
         (muzzleFlashMesh.material as THREE.MeshBasicMaterial).opacity = 0.95;
         muzzleFlashMesh.rotation.z = Math.random() * Math.PI;
@@ -142,16 +184,13 @@ export function fireWeapon(): void {
 
     raycaster.setFromCamera(SCREEN_CENTER, camera);
     raycaster.far = Infinity;
-    const hits = raycaster.intersectObjects(aliveTargetMeshes(), false);
+    const { target, point } = castShot();
     // Tracer origin follows the gun: bottom-right at hip, just under screen center when scoped
     const muzzleWorld = new THREE.Vector3(0.22 * (1 - ads.t), -0.12 + 0.06 * ads.t, -0.6).applyMatrix4(camera.matrixWorld);
 
-    if (hits.length > 0) {
-        createBulletTracer(muzzleWorld, hits[0].point);
-        applyHit(hits[0], 40, 160, 'VANDAL');
-    } else {
-        createBulletTracer(muzzleWorld, raycaster.ray.at(40, new THREE.Vector3()));
-    }
+    createBulletTracer(muzzleWorld, point ?? raycaster.ray.at(40, new THREE.Vector3()));
+    if (target) applyHit(target, 40, 160, 'VANDAL');
+    if (gameState.ammo === 0) startReload();
 }
 
 export function knifeSlash(): void {
@@ -165,6 +204,6 @@ export function knifeSlash(): void {
 
     raycaster.setFromCamera(SCREEN_CENTER, camera);
     raycaster.far = KNIFE_RANGE;
-    const hits = raycaster.intersectObjects(aliveTargetMeshes(), false);
-    if (hits.length > 0) applyHit(hits[0], 50, 100, 'KNIFE');
+    const { target } = castShot();
+    if (target) applyHit(target, 50, 100, 'KNIFE');
 }

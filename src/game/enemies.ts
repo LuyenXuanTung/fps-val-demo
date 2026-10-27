@@ -15,6 +15,8 @@ export interface EnemyBot {
     strafeDir: number;
     strafePhase: number;
     blindedUntil: number;
+    /** Set for the networked opponent: damage is forwarded instead of applied locally. */
+    onHit?: (dmg: number, head: boolean, weapon: string) => void;
 }
 
 export const enemies: EnemyBot[] = [];
@@ -24,7 +26,7 @@ export const enemySpawnPoints: THREE.Vector3[] = [
     new THREE.Vector3(1.6, 0, -7.8)
 ];
 
-export function createEnemyBot(spawnPos: THREE.Vector3, index: number): void {
+export function createEnemyBot(spawnPos: THREE.Vector3, index: number): EnemyBot {
     const group = new THREE.Group();
 
     const matSuit = new THREE.MeshStandardMaterial({
@@ -88,6 +90,7 @@ export function createEnemyBot(spawnPos: THREE.Vector3, index: number): void {
     });
 
     enemies.push(bot);
+    return bot;
 }
 
 export function initEnemies(): void {

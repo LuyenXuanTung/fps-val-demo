@@ -13,6 +13,16 @@
     <!-- Minimap -->
     <Minimap />
 
+    <!-- 1v1 round-start countdown -->
+    <div
+      v-if="lobby.countdown > 0"
+      role="status"
+      class="absolute top-[30%] left-1/2 -translate-x-1/2 text-center text-white pointer-events-none"
+    >
+      <div class="text-sm font-bold tracking-[0.3em] uppercase text-white/80">Chuẩn bị · {{ gameState.allyScore }} - {{ gameState.enemyScore }}</div>
+      <div class="text-7xl font-extrabold hud-number drop-shadow-[0_0_12px_rgba(255,70,85,0.8)]">{{ lobby.countdown }}</div>
+    </div>
+
     <!-- IME warning: Vietnamese Telex swallows W/A/S/D -->
     <div
       v-if="gameState.imeDetected"
@@ -331,7 +341,11 @@
         </svg>
 
         <span v-if="gameState.holdingKnife" class="text-[22px] font-bold leading-none text-white hud-number tracking-widest">KNIFE</span>
-        <span v-else class="text-[38px] font-bold leading-none text-white hud-number">∞</span>
+        <span v-else-if="gameState.reloadEndsAt" class="text-[22px] font-bold leading-none text-amber-300 hud-number tracking-widest">RELOAD</span>
+        <template v-else>
+          <span :class="gameState.ammo <= 5 ? 'text-red-400' : 'text-white'" class="text-[38px] font-bold leading-none hud-number">{{ gameState.ammo }}</span>
+          <span class="text-[16px] font-bold leading-none text-white/60 hud-number">/ ∞</span>
+        </template>
 
         <div v-if="!gameState.holdingKnife" class="flex space-x-[2px] self-center translate-y-0.5">
           <div class="w-[2.5px] h-3 bg-white/90 rounded-t-sm"></div>
@@ -360,6 +374,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import { gameState } from '../game/state.js';
+import { lobby } from '../game/net.js';
 import Minimap from './Minimap.vue';
 
 const shieldOffset = computed(() => {

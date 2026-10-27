@@ -1,5 +1,34 @@
 import { player } from './scene.js';
 import { enemies } from './enemies.js';
+import { isPvp } from './net.js';
+import { arenaColliders, ARENA_X } from './map.js';
+
+const ARENA_SCALE = 4.2; // px per world unit; 40-unit arena fits the 178px canvas
+
+/** 1v1 arena: walls + self only. Opponent is never drawn (would be a wallhack). */
+function drawArenaMinimap(ctx: CanvasRenderingContext2D): void {
+    ctx.clearRect(0, 0, 178, 178);
+    ctx.save();
+    ctx.translate(89, 89);
+    ctx.fillStyle = 'rgba(156,163,175,0.35)';
+    ctx.fillRect(-10 * ARENA_SCALE, -14 * ARENA_SCALE, 20 * ARENA_SCALE, 28 * ARENA_SCALE);
+    ctx.fillStyle = '#e5e7eb';
+    arenaColliders.forEach(b => ctx.fillRect(
+        (b.min.x - ARENA_X) * ARENA_SCALE, b.min.z * ARENA_SCALE,
+        (b.max.x - b.min.x) * ARENA_SCALE, (b.max.z - b.min.z) * ARENA_SCALE));
+    ctx.translate((player.pos.x - ARENA_X) * ARENA_SCALE, player.pos.z * ARENA_SCALE);
+    ctx.rotate(-player.yaw);
+    ctx.fillStyle = 'rgba(186, 230, 253, 0.45)';
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.arc(0, 0, 30, -Math.PI / 2 - 0.45, -Math.PI / 2 + 0.45);
+    ctx.fill();
+    ctx.fillStyle = '#bef264';
+    ctx.beginPath();
+    ctx.arc(0, 0, 4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+}
 
 let mmCanvas: HTMLCanvasElement | null = null;
 let mmCtx: CanvasRenderingContext2D | null = null;
@@ -11,6 +40,7 @@ export function initMinimap(canvasEl: HTMLCanvasElement): void {
 
 export function drawMinimap(): void {
     if (!mmCtx) return;
+    if (isPvp()) { drawArenaMinimap(mmCtx); return; }
 
     mmCtx.clearRect(0, 0, 178, 178);
     mmCtx.save();

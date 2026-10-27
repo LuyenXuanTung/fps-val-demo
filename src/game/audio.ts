@@ -124,6 +124,27 @@ export class SoundEngine {
         }
     }
 
+    /** Soft low thump; vol 0..1 (scaled by distance for the opponent). */
+    playFootstep(vol: number): void {
+        const r = this.ready();
+        if (!r || vol <= 0.01) return;
+        const { ctx, out, now } = r;
+        const src = ctx.createBufferSource();
+        src.buffer = this.slashNoise;
+        src.playbackRate.value = 0.8 + Math.random() * 0.3;
+        const filter = ctx.createBiquadFilter();
+        filter.type = 'lowpass';
+        filter.frequency.value = 520;
+        const gain = ctx.createGain();
+        gain.gain.setValueAtTime(0.5 * vol, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.09);
+        src.connect(filter);
+        filter.connect(gain);
+        gain.connect(out);
+        src.start(now);
+        src.stop(now + 0.1);
+    }
+
     playReloadSound(): void {
         const r = this.ready();
         if (!r) return;

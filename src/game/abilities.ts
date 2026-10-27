@@ -43,6 +43,7 @@ export function castEmpressUltimate(): void {
 }
 
 export function syncViewmodel(): void {
+    gameState.reloadEndsAt = 0; // swapping weapons cancels a reload in progress (like Valorant)
     vandalGroup.visible = !gameState.holdingSpike && !gameState.holdingKnife;
     spikeViewGroup.visible = gameState.holdingSpike;
     knifeViewGroup.visible = gameState.holdingKnife;

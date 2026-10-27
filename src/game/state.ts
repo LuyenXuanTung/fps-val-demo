@@ -51,6 +51,8 @@ export interface GameState {
     mouseSensitivity: number;
     imeDetected: boolean;
     scoped: boolean;
+    ammo: number;
+    reloadEndsAt: number;
 }
 
 export const gameState = reactive<GameState>({
@@ -83,7 +85,9 @@ export const gameState = reactive<GameState>({
     killfeed: [],
     mouseSensitivity: loadSensitivity(),
     imeDetected: false,
-    scoped: false
+    scoped: false,
+    ammo: 30,
+    reloadEndsAt: 0
 });
 
 watch(() => gameState.mouseSensitivity, v => localStorage.setItem(SENS_KEY, String(v)));
@@ -98,4 +102,6 @@ export function resetGameState(): void {
     gameState.spikePlanted = false;
     gameState.empressActive = false;
     gameState.dismissActive = false;
+    gameState.ammo = 30;
+    gameState.reloadEndsAt = 0;
 }

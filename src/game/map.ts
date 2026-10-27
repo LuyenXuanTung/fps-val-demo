@@ -2,7 +2,19 @@ import * as THREE from 'three';
 import { scene } from './scene.js';
 
 export const wallColliders: THREE.Box3[] = [];
+/** Solid meshes that stop bullets (same set as wallColliders). */
+export const wallMeshes: THREE.Mesh[] = [];
 export let floatingOrb: THREE.Group | null = null;
+
+const PLAYER_RADIUS = 0.3;
+
+/** 2D (XZ) footprint test against every solid box; height ignored. */
+export function isBlocked(x: number, z: number): boolean {
+    // ponytail: no standing on top of cover; add ground-height lookup if jump-on-crate is wanted
+    return wallColliders.some(b =>
+        x > b.min.x - PLAYER_RADIUS && x < b.max.x + PLAYER_RADIUS &&
+        z > b.min.z - PLAYER_RADIUS && z < b.max.z + PLAYER_RADIUS);
+}
 
 export function addWallBox(
     w: number,
@@ -23,6 +35,7 @@ export function addWallBox(
     scene.add(mesh);
     if (collidable) {
         wallColliders.push(new THREE.Box3().setFromObject(mesh));
+        wallMeshes.push(mesh);
     }
     return mesh;
 }
@@ -195,6 +208,18 @@ export function buildAMainEnvironment(): void {
     createFloorPad(-1.6, 2.2);
     createFloorPad(-4.2, -6.8);
 
+    // 7. Cover (skirmish-style): crates for full cover, low walls to peek over
+    const matCrate = new THREE.MeshStandardMaterial({ color: 0x8a6d4b, roughness: 0.8 });
+    const matCover = new THREE.MeshStandardMaterial({ color: 0x9fb3c2, roughness: 0.7 });
+    addWallBox(1.4, 1.4, 1.4, -1.0, 0.7, 10.0, matCrate);   // host spawn cover
+    addWallBox(3.2, 1.15, 0.5, 0.6, 0.575, 4.6, matCover);  // low wall: head peeks over
+    addWallBox(1.5, 1.5, 1.5, -6.8, 0.75, 6.5, matCrate);
+    addWallBox(1.0, 1.0, 1.0, -6.8, 2.0, 6.5, matCrate);    // stacked on top
+    addWallBox(1.5, 2.2, 1.5, -4.2, 1.1, 1.0, matCover);    // mid pillar
+    addWallBox(0.5, 2.6, 3.0, -7.8, 1.3, -4.5, matCover);   // left lane wall
+    addWallBox(2.4, 1.15, 0.5, -4.6, 0.575, -3.2, matCover);// low wall by electrical box (gaps both sides)
+    addWallBox(1.5, 1.5, 1.5, 1.6, 0.75, -11.0, matCrate);  // guest spawn cover
+
     // Dropped Weapon Pad
     const triGeom = new THREE.CircleGeometry(0.65, 3);
     const triMat = new THREE.MeshBasicMaterial({ color: 0x60a5fa, transparent: true, opacity: 0.45, side: THREE.DoubleSide });
@@ -226,4 +251,64 @@ export function buildAMainEnvironment(): void {
     orbGroup.position.set(-5.1, 0.85, -10.8);
     scene.add(orbGroup);
     floatingOrb = orbGroup;
+
+    buildSkirmishArena();
+}
+
+// 1v1 skirmish arena, built far from the practice map so both coexist (fog hides one from the other).
+// Layout: rectangular room, spawn alcove at each end, a shield wall in front of each alcove so
+// players can't see each other on spawn and must walk out to fight.
+export const ARENA_X = 200;
+export const arenaColliders: THREE.Box3[] = [];
+export const ARENA_SPAWNS = {
+    host: { pos: new THREE.Vector3(ARENA_X, 1.72, 17), yaw: 0 },        // south alcove, facing north (-Z)
+    guest: { pos: new THREE.Vector3(ARENA_X, 1.72, -17), yaw: Math.PI } // north alcove, facing south
+};
+
+function buildSkirmishArena(): void {
+    const matFloor = new THREE.MeshStandardMaterial({ map: createFloorTexture(), roughness: 0.65 });
+    const matWall = new THREE.MeshStandardMaterial({ color: 0x799eb5, roughness: 0.65 });
+    const matShield = new THREE.MeshStandardMaterial({ color: 0xbc9669, roughness: 0.7 });
+    const matCrate = new THREE.MeshStandardMaterial({ color: 0x8a6d4b, roughness: 0.8 });
+    const matCover = new THREE.MeshStandardMaterial({ color: 0x9fb3c2, roughness: 0.7 });
+
+    // Arena-relative box (x, z offsets; y is center height)
+    const box = (w: number, h: number, d: number, x: number, z: number, mat: THREE.Material, y = h / 2) => {
+        const before = wallColliders.length;
+        addWallBox(w, h, d, ARENA_X + x, y, z, mat);
+        arenaColliders.push(...wallColliders.slice(before));
+    };
+
+    const floor = new THREE.Mesh(new THREE.PlaneGeometry(22, 40), matFloor);
+    floor.rotation.x = -Math.PI / 2;
+    floor.position.set(ARENA_X, 0, 0);
+    floor.receiveShadow = true;
+    scene.add(floor);
+
+    const H = 5;
+    // Outer walls of the 20 x 28 main room
+    box(0.6, H, 28.6, -10.3, 0, matWall);
+    box(0.6, H, 28.6, 10.3, 0, matWall);
+    for (const s of [1, -1]) {
+        // End walls with a 5-wide opening into the spawn alcove
+        box(8.1, H, 0.6, -6.55, 14.3 * s, matWall);
+        box(8.1, H, 0.6, 6.55, 14.3 * s, matWall);
+        // Alcove (5 wide, 5 deep)
+        box(0.6, H, 5.6, -2.8, 16.8 * s, matWall);
+        box(0.6, H, 5.6, 2.8, 16.8 * s, matWall);
+        box(6.2, H, 0.6, 0, 19.3 * s, matWall);
+        // Spawn shield: blocks the straight line between alcoves (tall enough to hide a jump)
+        box(6, 3.5, 0.6, 0, 11.5 * s, matShield);
+    }
+
+    // Scattered cover (mirrored-ish so neither side is favored)
+    box(1.4, 1.4, 1.4, -5, 6, matCrate);
+    box(3, 1.15, 0.6, 5, 7, matCover);
+    box(1.5, 2.5, 1.5, 0, 0, matCover);
+    box(0.6, 1.15, 3, -6, -2, matCover);
+    box(1.5, 1.5, 1.5, 6, -3, matCrate);
+    box(3, 1.15, 0.6, -4, -7, matCover);
+    box(1.4, 1.4, 1.4, 5, -7, matCrate);
+    box(1.4, 2, 2, -9.3, 3, matCover);
+    box(1.4, 2, 2, 9.3, -4, matCover);
 }

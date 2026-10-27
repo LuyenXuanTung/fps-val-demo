@@ -3,6 +3,8 @@ import { createImeTracker } from './ime.js';
 import { sound } from './audio.js';
 import { player, camera, HIP_FOV } from './scene.js';
 import { castLeerBlind, castDevourHeal, castDismiss, castEmpressUltimate, toggleSpikeEquip, toggleKnife, syncViewmodel } from './abilities.js';
+import { isPvp } from './net.js';
+import { startReload, isReloading } from './combat.js';
 
 const imeTracker = createImeTracker();
 
@@ -44,11 +46,15 @@ export function setupInput(): void {
         e.preventDefault();
         if (e.repeat) return;
 
-        if (code === 'KeyC') castLeerBlind();
-        if (code === 'KeyQ') castDevourHeal();
-        if (code === 'KeyE') castDismiss();
-        if (code === 'KeyX') castEmpressUltimate();
-        if (code === 'Digit4') toggleSpikeEquip();
+        // 1v1 is pure gunplay: no abilities, no spike
+        if (!isPvp()) {
+            if (code === 'KeyC') castLeerBlind();
+            if (code === 'KeyQ') castDevourHeal();
+            if (code === 'KeyE') castDismiss();
+            if (code === 'KeyX') castEmpressUltimate();
+            if (code === 'Digit4') toggleSpikeEquip();
+        }
+        if (code === 'KeyR') startReload();
         if (code === 'Digit1') {
             if (gameState.holdingSpike) toggleSpikeEquip();
             if (gameState.holdingKnife) toggleKnife();
@@ -93,7 +99,7 @@ export function setupInput(): void {
     window.addEventListener('mousedown', (e: MouseEvent) => {
         if (document.pointerLockElement !== document.body) return;
         if (e.button === 0) isMouseDown = true;
-        if (e.button === 2 && !gameState.holdingKnife && !gameState.holdingSpike) gameState.scoped = !gameState.scoped;
+        if (e.button === 2 && !gameState.holdingKnife && !gameState.holdingSpike && !isReloading()) gameState.scoped = !gameState.scoped;
     });
 
     window.addEventListener('mouseup', (e: MouseEvent) => {

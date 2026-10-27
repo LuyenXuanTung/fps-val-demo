@@ -2,10 +2,10 @@ import * as THREE from 'three';
 import { gameState } from './state.js';
 import { sound } from './audio.js';
 import { initScene, renderer, scene, camera, player, viewmodelScene, viewmodelCamera, HIP_FOV, ADS_FOV, VM_HIP_FOV, VM_ADS_FOV } from './scene.js';
-import { buildAMainEnvironment, floatingOrb } from './map.js';
+import { buildAMainEnvironment, floatingOrb, isBlocked } from './map.js';
 import { buildFirstPersonVandal, vandalGroup, spikeViewGroup, muzzleFlashMesh, auraFlames, gunBuddyMesh, knifeViewGroup, knifeBlade, KNIFE_REST_POS, KNIFE_REST_ROT, equipState, DRAW_MS, isDrawing, ads, ADS_POS, HIP_POS, HIP_ROT } from './weapon.js';
 import { initEnemies, enemies } from './enemies.js';
-import { activeTracers, soulOrbs, fireWeapon, knifeSlash, lastSlashTime, recoil, RECOIL_RECOVERY } from './combat.js';
+import { activeTracers, soulOrbs, fireWeapon, knifeSlash, lastSlashTime, recoil, RECOIL_RECOVERY, updateReload, RELOAD_MS } from './combat.js';
 
 const SLASH_ANIM_MS = 260;
 const ADS_SPEED = 16; // higher = snappier scope-in (~150ms to 90%)
@@ -16,10 +16,7 @@ const easeOutBack = (t: number) => {
     return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
 };
 
-// Electrical box + center pillar footprint
-function isBlocked(x: number, z: number): boolean {
-    return x > -2.1 && z < -1.85 && z > -4.4;
-}
+// Movement collision now uses every solid map box (walls + cover) from map.ts
 
 function disposeObject(obj: THREE.Mesh | THREE.Line): void {
     scene.remove(obj);
@@ -38,6 +35,10 @@ function updateCamera(dt: number): void {
 import { toggleSpikeEquip } from './abilities.js';
 import { setupInput, keys, isMouseDown } from './input.js';
 import { drawMinimap } from './minimap.js';
+import { updateNet, notifyStep, isPvp, isFrozen } from './net.js';
+
+const STEP_STRIDE = 2.0; // world units between running footsteps
+let stepDist = 0;
 
 let prevTime = performance.now();
 let animFrameId: number | null = null;
@@ -64,8 +65,8 @@ export function startGameEngine(canvasEl: HTMLCanvasElement): () => void {
         const dt = Math.min((now - prevTime) / 1000, 0.1);
         prevTime = now;
 
-        // 1. Player movement
-        if (gameState.isLocked) {
+        // 1. Player movement (frozen during the 1v1 round-start countdown: look only)
+        if (gameState.isLocked && !isFrozen(now)) {
             const moveSpeed = gameState.dismissActive ? 9.5 : (keys['ShiftLeft'] ? 3.4 : 6.2);
             const forward = new THREE.Vector3(-Math.sin(player.yaw), 0, -Math.cos(player.yaw));
             const right = new THREE.Vector3(Math.cos(player.yaw), 0, -Math.sin(player.yaw));
@@ -81,8 +82,11 @@ export function startGameEngine(canvasEl: HTMLCanvasElement): () => void {
             nextPos.x += wishDir.x * moveSpeed * dt;
             nextPos.z += wishDir.z * moveSpeed * dt;
 
-            nextPos.x = Math.max(-9.4, Math.min(3.15, nextPos.x));
-            nextPos.z = Math.max(-12.2, Math.min(12.8, nextPos.z));
+            // Practice map has no solid outer boundary on every side; the arena is fully walled
+            if (!isPvp()) {
+                nextPos.x = Math.max(-9.4, Math.min(3.15, nextPos.x));
+                nextPos.z = Math.max(-12.2, Math.min(12.8, nextPos.z));
+            }
 
             // Resolve each axis separately so the player slides along walls
             // instead of stopping dead when moving diagonally into them.
@@ -119,16 +123,27 @@ export function startGameEngine(canvasEl: HTMLCanvasElement): () => void {
                 }
             }
 
-            // Bobbing
-            if (wishDir.lengthSq() > 0 && player.onGround) {
+            // Bobbing + footsteps. Shift = walk (silent), otherwise run (audible to both players)
+            const moving = wishDir.lengthSq() > 0 && player.onGround;
+            if (moving) {
                 gameState.gunBobTime += dt * (keys['ShiftLeft'] ? 6 : 11);
+                if (!keys['ShiftLeft']) {
+                    stepDist += moveSpeed * dt;
+                    if (stepDist >= STEP_STRIDE) {
+                        stepDist = 0;
+                        sound.playFootstep(0.6);
+                        notifyStep();
+                    }
+                }
             } else {
                 gameState.gunBobTime += dt * 1.6;
             }
         }
 
-        // 2. Camera (when not locked, the movement block above didn't run it)
-        if (!gameState.isLocked) updateCamera(dt);
+        updateReload(now);
+
+        // 2. Camera (when the movement block above didn't run it)
+        if (!gameState.isLocked || isFrozen(now)) updateCamera(dt);
 
         // 3. Viewmodel Animation
         gameState.recoilOffset = THREE.MathUtils.lerp(gameState.recoilOffset, 0, dt * 14);
@@ -152,8 +167,11 @@ export function startGameEngine(canvasEl: HTMLCanvasElement): () => void {
         // Draw: weapon rises from below screen with ease-out-back overshoot
         const drawT = Math.min(1, (now - equipState.time) / DRAW_MS);
         const drawLeft = 1 - easeOutBack(drawT); // 1 -> 0 (slightly negative = overshoot)
-        const drawDrop = drawLeft * 0.35;
-        const drawTilt = drawLeft * 0.9;
+        // Reload: gun dips and tilts down, then comes back up (sin hump over the reload window)
+        const reloadLeft = gameState.reloadEndsAt - now;
+        const reloadDip = reloadLeft > 0 ? Math.sin((1 - reloadLeft / RELOAD_MS) * Math.PI) : 0;
+        const drawDrop = drawLeft * 0.35 + reloadDip * 0.12;
+        const drawTilt = drawLeft * 0.9 + reloadDip * 0.6;
 
         // Recoil kicks the gun back; in ADS keep the muzzle-rise small so the reticle stays near center
         const recoilRot = gameState.recoilOffset * (1.4 * hip + 0.25 * ads.t);
@@ -212,9 +230,10 @@ export function startGameEngine(canvasEl: HTMLCanvasElement): () => void {
             floatingOrb.position.y = 0.85 + Math.sin(now * 0.004) * 0.08;
         }
 
-        // 4. Update Bots
+        // 4. Update Bots (practice only; the networked opponent is driven by updateNet)
+        updateNet(dt, now);
         enemies.forEach(bot => {
-            if (!bot.alive) return;
+            if (!bot.alive || bot.onHit) return;
             const isBlinded = now < bot.blindedUntil;
             const speed = isBlinded ? 0.4 : 1.65;
             bot.strafePhase += dt * speed;
